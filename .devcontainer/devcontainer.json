@@ -1,0 +1,15 @@
+{
+  "name": "GrocSplit",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  "forwardPorts": [3000, 3001],
+  "portsAttributes": {
+    "3001": { "label": "API Server", "onAutoForward": "notify" },
+    "3000": { "label": "React App", "onAutoForward": "openBrowser" }
+  },
+  "postCreateCommand": "npm install && node db/migrate.js",
+  "secrets": {
+    "PLAID_CLIENT_ID": { "description": "Plaid Client ID" },
+    "PLAID_SECRET": { "description": "Plaid Secret Key" },
+    "PLAID_ENV": { "description": "sandbox | development | production" }
+  }
+}
