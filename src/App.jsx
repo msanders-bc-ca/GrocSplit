@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import * as api from "./api";
 
 // ── Palette & fonts injected via style tag ──────────────────────────────────
 const GLOBAL_STYLE = `
@@ -74,42 +75,89 @@ const GLOBAL_STYLE = `
   .fade-in { animation: fadeIn .25s ease both; }
 `;
 
-// ── Seed / Helpers ──────────────────────────────────────────────────────────
-const SEED_PEOPLE = [
-  { id: 1, name: "Alex" },
-  { id: 2, name: "Jordan" },
-  { id: 3, name: "Taylor" },
-];
-
-const SEED_TRANSACTIONS = [
-  { id: "t1", date: "2025-01-04", merchant: "Loblaws", amount: 127.43, source: "visa", verified: false },
-  { id: "t2", date: "2025-01-07", merchant: "Whole Foods", amount: 89.12, source: "visa", verified: false },
-  { id: "t3", date: "2025-01-11", merchant: "Costco", amount: 213.55, source: "visa", verified: true },
-  { id: "t4", date: "2025-01-14", merchant: "FreshCo", amount: 54.20, source: "visa", verified: false },
-  { id: "t5", date: "2025-01-19", merchant: "Metro", amount: 102.87, source: "visa", verified: true },
-  { id: "t6", date: "2025-01-23", merchant: "NoFrills", amount: 78.34, source: "receipt", verified: true },
-];
-
+// ── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (n) => `$${Number(n).toFixed(2)}`;
-const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const currentMonth = () => { const d = new Date(); return `${months[d.getMonth()]} ${d.getFullYear()}`; };
+
+function monthKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
 // ── App ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState("cycle");
-  const [people, setPeople] = useState(SEED_PEOPLE);
+  const [people, setPeople] = useState([]);
   const [newPersonName, setNewPersonName] = useState("");
-  const [transactions, setTransactions] = useState(SEED_TRANSACTIONS);
-  const [receipts, setReceipts] = useState([]); // {id, personId, amount, note}
-  const [dinners, setDinners] = useState({}); // {personId: count}
-  const [cycleName] = useState(currentMonth());
+  const [transactions, setTransactions] = useState([]);
+  const [receipts, setReceipts] = useState([]); // { id, personId, amount, note }
+  const [dinners, setDinners] = useState({});   // { [personId]: count }
+  const [cycleId, setCycleId] = useState(null);
+  const [cycleName, setCycleName] = useState("");
   const [plaidStatus, setPlaidStatus] = useState("idle"); // idle | loading | done | error
-  const [history] = useState([
-    { month: "Dec 2024", total: 621.40, people: ["Alex","Jordan","Taylor"] },
-    { month: "Nov 2024", total: 558.20, people: ["Alex","Jordan","Taylor"] },
-  ]);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const dinnersModified = useRef(false);
 
-  // ── Derived ──────────────────────────────────────────────────────────────
+  // ── Bootstrap ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    async function bootstrap() {
+      try {
+        const [peopleData, allCycles] = await Promise.all([
+          api.getPeople(),
+          api.getCycles(),
+        ]);
+        setPeople(peopleData);
+
+        const mk = monthKey();
+        let cycle = allCycles.find((c) => c.month_key === mk);
+        if (!cycle) cycle = await api.createCycle(mk);
+
+        setCycleId(cycle.id);
+        setCycleName(cycle.label);
+        setHistory(allCycles.filter((c) => c.month_key !== mk));
+
+        const detail = await api.getCycle(cycle.id);
+        applyDetail(detail);
+      } catch (err) {
+        setLoadError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    }
+    bootstrap();
+  }, []);
+
+  function applyDetail(detail) {
+    setTransactions(detail.transactions.map((t) => ({ ...t, verified: !!t.verified })));
+    setReceipts(
+      detail.personalReceipts.map((r) => ({
+        id: r.id,
+        personId: r.person_id,
+        amount: Number(r.amount),
+        note: r.note,
+      }))
+    );
+    const dm = {};
+    for (const e of detail.dinnerEntries) dm[e.person_id] = e.dinner_count;
+    setDinners(dm);
+    dinnersModified.current = false;
+  }
+
+  // ── Auto-save dinners (debounced) ─────────────────────────────────────────
+  useEffect(() => {
+    if (!cycleId || !dinnersModified.current) return;
+    const timer = setTimeout(() => {
+      const entries = Object.entries(dinners).map(([person_id, dinner_count]) => ({
+        person_id,
+        dinner_count: Number(dinner_count) || 0,
+      }));
+      api.saveDinners(cycleId, entries).catch(console.error);
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [dinners, cycleId]);
+
+  // ── Derived ───────────────────────────────────────────────────────────────
   const totalGroceries = transactions.reduce((s, t) => s + t.amount, 0);
   const totalDinners = people.reduce((s, p) => s + (Number(dinners[p.id]) || 0), 0);
 
@@ -120,34 +168,126 @@ export default function App() {
     return { ...p, dinners: Number(dinners[p.id]) || 0, pct, owes, paid, balance: owes - paid };
   });
 
-  // ── Handlers ─────────────────────────────────────────────────────────────
-  const addPerson = () => {
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const addPerson = async () => {
     if (!newPersonName.trim()) return;
-    setPeople([...people, { id: Date.now(), name: newPersonName.trim() }]);
-    setNewPersonName("");
+    try {
+      const person = await api.addPerson(newPersonName.trim());
+      setPeople((prev) => [...prev, person]);
+      setNewPersonName("");
+      if (cycleId) {
+        await api.saveDinners(cycleId, [{ person_id: person.id, dinner_count: 0 }]);
+        setDinners((prev) => ({ ...prev, [person.id]: 0 }));
+      }
+    } catch (err) {
+      alert(err.message);
+    }
   };
 
-  const removePerson = (id) => setPeople(people.filter((p) => p.id !== id));
-
-  const toggleVerified = (id) =>
-    setTransactions(transactions.map((t) => t.id === id ? { ...t, verified: !t.verified } : t));
-
-  const addReceipt = (personId, amount, note) => {
-    setReceipts([...receipts, { id: Date.now(), personId, amount: Number(amount), note }]);
+  const removePerson = async (id) => {
+    try {
+      await api.removePerson(id);
+      setPeople((prev) => prev.filter((p) => p.id !== id));
+    } catch (err) {
+      alert(err.message);
+    }
   };
 
-  const removeReceipt = (id) => setReceipts(receipts.filter((r) => r.id !== id));
+  const toggleVerified = async (id) => {
+    const t = transactions.find((tx) => tx.id === id);
+    if (!t || !cycleId) return;
+    const next = !t.verified;
+    // Optimistic update
+    setTransactions((prev) => prev.map((tx) => (tx.id === id ? { ...tx, verified: next } : tx)));
+    try {
+      await api.setVerified(cycleId, id, next);
+    } catch (err) {
+      // Revert on failure
+      setTransactions((prev) => prev.map((tx) => (tx.id === id ? { ...tx, verified: t.verified } : tx)));
+    }
+  };
 
-  const mockPlaidFetch = () => {
+  const addReceipt = async (personId, amount, note) => {
+    if (!cycleId) return;
+    try {
+      const updated = await api.addReceipt(cycleId, { person_id: personId, amount: Number(amount), note });
+      setReceipts(updated.map((r) => ({ id: r.id, personId: r.person_id, amount: Number(r.amount), note: r.note })));
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const removeReceipt = async (id) => {
+    if (!cycleId) return;
+    try {
+      await api.deleteReceipt(cycleId, id);
+      setReceipts((prev) => prev.filter((r) => r.id !== id));
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handlePlaidSync = async () => {
+    if (!cycleId) return;
     setPlaidStatus("loading");
-    setTimeout(() => {
-      setTransactions((prev) => [
-        ...prev,
-        { id: "t_new1", date: "2025-01-28", merchant: "Superstore (synced)", amount: 167.00, source: "visa", verified: false },
-      ]);
+    try {
+      await api.syncPlaid(cycleId);
+      const txList = await api.getTransactions(cycleId);
+      setTransactions(txList.map((t) => ({ ...t, verified: !!t.verified })));
       setPlaidStatus("done");
-    }, 1800);
+    } catch (err) {
+      setPlaidStatus("error");
+    }
   };
+
+  const addManualTransaction = async () => {
+    if (!cycleId) return;
+    const amt = prompt("Amount?");
+    const merchant = prompt("Merchant?");
+    if (!amt || !merchant) return;
+    try {
+      const updated = await api.addTransaction(cycleId, { merchant, amount: Number(amt), source: "receipt" });
+      setTransactions(updated.map((t) => ({ ...t, verified: !!t.verified })));
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const removeTransaction = async (id) => {
+    if (!cycleId) return;
+    try {
+      await api.deleteTransaction(cycleId, id);
+      setTransactions((prev) => prev.filter((t) => t.id !== id));
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const handleDinnerChange = (personId, value) => {
+    dinnersModified.current = true;
+    setDinners((prev) => ({ ...prev, [personId]: value }));
+  };
+
+  // ── Loading / Error ───────────────────────────────────────────────────────
+  if (loading) return (
+    <>
+      <style>{GLOBAL_STYLE}</style>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", color: "var(--muted)", fontFamily: "var(--font-mono)", fontSize: 14 }}>
+        Loading…
+      </div>
+    </>
+  );
+
+  if (loadError) return (
+    <>
+      <style>{GLOBAL_STYLE}</style>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", flexDirection: "column", gap: 12 }}>
+        <div style={{ color: "var(--accent2)", fontWeight: 700, fontSize: 18 }}>Could not reach backend</div>
+        <div style={{ color: "var(--muted)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{loadError}</div>
+        <button className="btn-primary" onClick={() => window.location.reload()}>Retry</button>
+      </div>
+    </>
+  );
 
   // ── UI ────────────────────────────────────────────────────────────────────
   return (
@@ -218,7 +358,7 @@ export default function App() {
                       person={p}
                       billData={b}
                       dinnerVal={dinners[p.id] || ""}
-                      onDinnerChange={(v) => setDinners({ ...dinners, [p.id]: v })}
+                      onDinnerChange={(v) => handleDinnerChange(p.id, v)}
                       receipts={receipts.filter((r) => r.personId === p.id)}
                       onAddReceipt={(amt, note) => addReceipt(p.id, amt, note)}
                       onRemoveReceipt={removeReceipt}
@@ -278,17 +418,11 @@ export default function App() {
                 </div>
                 {plaidStatus === "done" && <span className="tag tag-green">✓ Synced</span>}
                 {plaidStatus === "loading" && <span className="tag tag-yellow">syncing…</span>}
-                <button className="btn-primary" onClick={mockPlaidFetch} disabled={plaidStatus === "loading"}>
+                {plaidStatus === "error" && <span className="tag tag-red">sync failed</span>}
+                <button className="btn-primary" onClick={handlePlaidSync} disabled={plaidStatus === "loading"}>
                   {plaidStatus === "loading" ? "Syncing…" : "Sync Plaid"}
                 </button>
-                <button className="btn-ghost" onClick={() => {
-                  const amt = prompt("Amount?");
-                  const merchant = prompt("Merchant?");
-                  if (amt && merchant) setTransactions([...transactions, {
-                    id: `manual_${Date.now()}`, date: new Date().toISOString().slice(0,10),
-                    merchant, amount: Number(amt), source: "receipt", verified: false
-                  }]);
-                }}>+ Manual Receipt</button>
+                <button className="btn-ghost" onClick={addManualTransaction}>+ Manual Receipt</button>
               </div>
 
               {/* Transaction list */}
@@ -318,7 +452,7 @@ export default function App() {
                         </td>
                         <td style={{ padding: "12px 20px" }}>
                           <button className="btn-danger" style={{ padding: "4px 10px", fontSize: 11 }}
-                            onClick={() => setTransactions(transactions.filter((x) => x.id !== t.id))}>
+                            onClick={() => removeTransaction(t.id)}>
                             Remove
                           </button>
                         </td>
@@ -366,12 +500,16 @@ export default function App() {
             <div className="fade-in">
               <SectionHeader title="Billing History" subtitle="Past monthly cycles stored for reference" />
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {history.length === 0 && (
+                  <div style={{ color: "var(--muted)", fontFamily: "var(--font-mono)", fontSize: 13 }}>
+                    No past cycles yet.
+                  </div>
+                )}
                 {history.map((h) => (
-                  <div key={h.month} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "18px 24px", display: "flex", alignItems: "center", gap: 20 }}>
-                    <div style={{ fontWeight: 800, fontSize: 16, minWidth: 100 }}>{h.month}</div>
-                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 22, color: "var(--accent3)", fontWeight: 700 }}>{fmt(h.total)}</div>
+                  <div key={h.id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "18px 24px", display: "flex", alignItems: "center", gap: 20 }}>
+                    <div style={{ fontWeight: 800, fontSize: 16, minWidth: 160 }}>{h.label}</div>
                     <div style={{ flex: 1, fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted)" }}>
-                      {h.people.join(" · ")}
+                      {h.finalized ? <span className="tag tag-green">finalized</span> : <span className="tag tag-yellow">open</span>}
                     </div>
                     <button className="btn-ghost" style={{ fontSize: 11 }}>View</button>
                   </div>
