@@ -133,7 +133,11 @@ router.post("/sync/:cycleId", async (req, res) => {
       const amount = Math.abs(t.amount);
       if (amount <= 0) { skipped++; continue; }
 
-      const result = tx.insert.run({
+      // Skip if this Plaid transaction was already imported (any cycle)
+      const existing = tx.byPlaidId.get({ plaid_id: t.transaction_id });
+      if (existing) { skipped++; continue; }
+
+      tx.insert.run({
         id: uuidv4(),
         cycle_id: cycle.id,
         plaid_id: t.transaction_id,
@@ -144,9 +148,7 @@ router.post("/sync/:cycleId", async (req, res) => {
         notes: null,
       });
 
-      // INSERT OR IGNORE: if plaid_id already exists, changes = 0
-      if (result.changes > 0) added++;
-      else skipped++;
+      added++;
     }
 
     // Mark item as synced

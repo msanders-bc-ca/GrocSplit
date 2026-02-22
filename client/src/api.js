@@ -28,7 +28,8 @@ export const removePerson  = (id)            => request("DELETE", `/people/${id}
 export const getCycles     = ()              => request("GET",    "/cycles");
 export const createCycle   = (month_key)     => request("POST",   "/cycles", { month_key });
 export const getCycle      = (id)            => request("GET",    `/cycles/${id}`);
-export const finalizeCycle = (id)            => request("POST",   `/cycles/${id}/finalize`);
+export const finalizeCycle   = (id)           => request("POST",   `/cycles/${id}/finalize`);
+export const unfinalizeCycle = (id)           => request("POST",   `/cycles/${id}/unfinalize`);
 export const getBill       = (id)            => request("GET",    `/cycles/${id}/bill`);
 
 // ── Dinners ────────────────────────────────────────────────────────────────

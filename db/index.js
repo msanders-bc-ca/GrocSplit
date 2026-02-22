@@ -57,8 +57,7 @@ function run(sql, params = {}) {
   stmt.run(namedToPositional(sql, params));
   stmt.free();
   saveToDisk();
-  // sql.js doesn't expose changed row count easily; return a compatible shape
-  return { changes: 1 };
+  return { changes: db.getRowsModified() };
 }
 
 /**
@@ -174,7 +173,7 @@ function prepare(sql) {
       }
       stmt.free();
       saveToDisk();
-      return { changes: 1 };
+      return { changes: db.getRowsModified() };
     },
   };
 }
@@ -242,6 +241,7 @@ const cycleQueries = () => ({
      VALUES (@id, @month_key, @label, @date_from, @date_to)`
   ),
   finalize:   prepare("UPDATE cycles SET finalized = 1 WHERE id = @id"),
+  unfinalize: prepare("UPDATE cycles SET finalized = 0 WHERE id = @id"),
 });
 
 const plaidQueryDefs = () => ({
@@ -259,8 +259,11 @@ const txQueryDefs = () => ({
   byCycle: prepare(
     "SELECT * FROM transactions WHERE cycle_id = @cycle_id ORDER BY date DESC"
   ),
+  byPlaidId: prepare(
+    "SELECT id FROM transactions WHERE plaid_id = @plaid_id LIMIT 1"
+  ),
   insert: prepare(
-    `INSERT OR IGNORE INTO transactions
+    `INSERT INTO transactions
        (id, cycle_id, plaid_id, date, merchant, amount, source, notes)
      VALUES (@id, @cycle_id, @plaid_id, @date, @merchant, @amount, @source, @notes)`
   ),

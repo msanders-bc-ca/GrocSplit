@@ -92,6 +92,18 @@ router.post("/:id/finalize", (req, res) => {
   }
 });
 
+// POST /api/cycles/:id/unfinalize
+router.post("/:id/unfinalize", (req, res) => {
+  try {
+    const cycle = cycles.byId.get(req.params.id);
+    if (!cycle) return res.status(404).json({ error: "Cycle not found" });
+    cycles.unfinalize.run(req.params.id);
+    res.json({ ok: true, cycle: cycles.byId.get(req.params.id) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/cycles/:id/bill  — just the calculated bill
 router.get("/:id/bill", (req, res) => {
   try {
