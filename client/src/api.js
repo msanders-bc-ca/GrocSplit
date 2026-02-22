@@ -4,7 +4,7 @@
  * Import and use in your React components.
  */
 
-const BASE = process.env.REACT_APP_API_URL || "http://localhost:3001/api";
+const BASE = "/api";
 
 async function request(method, path, body) {
   const res = await fetch(`${BASE}${path}`, {

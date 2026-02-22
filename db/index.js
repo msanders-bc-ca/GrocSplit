@@ -116,19 +116,35 @@ function namedToPositional(sql, params) {
 // ── Prepared statement factory ────────────────────────────────────────────────
 // Returns an object that mimics better-sqlite3's prepared statement interface.
 // Routes call e.g. people.all.all() or people.insert.run({id, name}).
+//
+// Supports three calling conventions (matching better-sqlite3 behaviour):
+//   stmt.all()                  — no params
+//   stmt.get("some-id")         — single primitive → positional bind [value]
+//   stmt.run({ id, name, … })   — named params object → rewritten to $keys
 
 function prepare(sql) {
   // Rewrite named params (@foo) to $foo so sql.js can parse the statement
-  const sqlForSqlJs = sql.replace(/@(\w+)/g, "\$$1");
+  const sqlForSqlJs = sql.replace(/@(\w+)/g, (_, name) => `$${name}`);
+
+  // Bind params to a prepared statement, handling all three calling conventions.
+  function bind(stmt, params) {
+    if (params === undefined || params === null) return;
+    if (Array.isArray(params)) {
+      stmt.bind(params);
+    } else if (typeof params !== 'object') {
+      // Single primitive (string / number) — positional bind as first param
+      stmt.bind([params]);
+    } else {
+      const rewritten = rewriteKeys(params);
+      if (Object.keys(rewritten).length) stmt.bind(rewritten);
+    }
+  }
 
   return {
     // For SELECT — return all rows
-    all: (params = {}) => {
-      const rewrittenParams = rewriteKeys(params);
+    all: (params) => {
       const stmt = db.prepare(sqlForSqlJs);
-      if (Object.keys(rewrittenParams).length || Array.isArray(rewrittenParams)) {
-        stmt.bind(Array.isArray(rewrittenParams) ? rewrittenParams : rewrittenParams);
-      }
+      bind(stmt, params);
       const rows = [];
       while (stmt.step()) rows.push(stmt.getAsObject());
       stmt.free();
@@ -136,22 +152,26 @@ function prepare(sql) {
     },
 
     // For SELECT — return first row or undefined
-    get: (params = {}) => {
-      const rewrittenParams = rewriteKeys(params);
+    get: (params) => {
       const stmt = db.prepare(sqlForSqlJs);
-      if (Object.keys(rewrittenParams).length || Array.isArray(rewrittenParams)) {
-        stmt.bind(rewrittenParams);
-      }
+      bind(stmt, params);
       const row = stmt.step() ? stmt.getAsObject() : undefined;
       stmt.free();
       return row;
     },
 
     // For INSERT / UPDATE / DELETE
-    run: (params = {}) => {
-      const rewrittenParams = rewriteKeys(params);
+    run: (params) => {
       const stmt = db.prepare(sqlForSqlJs);
-      stmt.run(rewrittenParams);
+      if (params === undefined || params === null) {
+        stmt.run();
+      } else if (Array.isArray(params)) {
+        stmt.run(params);
+      } else if (typeof params !== 'object') {
+        stmt.run([params]);
+      } else {
+        stmt.run(rewriteKeys(params));
+      }
       stmt.free();
       saveToDisk();
       return { changes: 1 };
