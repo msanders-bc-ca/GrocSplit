@@ -49,6 +49,8 @@ export const setVerified        = (cycleId, txId, verified) =>
   request("PATCH", `/cycles/${cycleId}/transactions/${txId}`, { verified });
 export const deleteTransaction  = (cycleId, txId) =>
   request("DELETE", `/cycles/${cycleId}/transactions/${txId}`);
+export const importCsv          = (cycleId, csv) =>
+  request("POST", `/cycles/${cycleId}/transactions/import-csv`, { csv });
 
 // ── Plaid ──────────────────────────────────────────────────────────────────
 export const getPlaidStatus    = ()         => request("GET",  "/plaid/status");

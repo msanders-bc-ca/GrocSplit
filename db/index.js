@@ -315,9 +315,13 @@ const receiptQueryDefs = () => ({
 
 function computeBill(cycleId) {
   const totalRow = txQueryDefs().totalForCycle.get({ cycle_id: cycleId });
-  const total = totalRow ? Number(totalRow.total) : 0;
+  const txTotal = totalRow ? Number(totalRow.total) : 0;
   const dinnerRows = dinnerQueryDefs().byCycle.all({ cycle_id: cycleId });
   const receiptRows = receiptQueryDefs().byCycle.all({ cycle_id: cycleId });
+
+  // Total grocery spend = shared transactions + all personal out-of-pocket receipts
+  const receiptTotal = receiptRows.reduce((s, r) => s + Number(r.amount), 0);
+  const total = txTotal + receiptTotal;
 
   const totalDinners = dinnerRows.reduce((s, d) => s + Number(d.dinner_count), 0);
 

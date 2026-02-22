@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import * as api from "./api";
 
 // ── Palette & fonts injected via style tag ──────────────────────────────────
@@ -106,7 +106,10 @@ export default function App() {
   const [manualDate, setManualDate] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  const [csvImporting, setCsvImporting] = useState(false);
+  const [csvResult, setCsvResult] = useState(null); // null | { added, skipped, errors }
   const dinnersModified = useRef(false);
+  const csvFileRef = useRef(null);
   const [cycleFinalized, setCycleFinalized] = useState(false);
   const [copied, setCopied] = useState(false);
   const [historyView, setHistoryView] = useState(null); // null | cycle detail object
@@ -181,7 +184,11 @@ export default function App() {
   }, [dinners, cycleId]);
 
   // ── Derived ───────────────────────────────────────────────────────────────
-  const totalGroceries = transactions.reduce((s, t) => s + t.amount, 0);
+  // Total includes both shared transactions (Visa/CSV/manual) and per-person
+  // out-of-pocket receipts — all represent real grocery spend the household splits.
+  const totalGroceries =
+    transactions.reduce((s, t) => s + t.amount, 0) +
+    receipts.reduce((s, r) => s + r.amount, 0);
 
   // Combined sorted list for the Transactions tab (shared charges + personal out-of-pocket)
   const allEntries = [
@@ -333,6 +340,25 @@ export default function App() {
       alert(err.message);
     }
   };
+
+  const handleCsvImport = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !cycleId) return;
+    e.target.value = ""; // reset so same file can be re-selected
+    setCsvImporting(true);
+    setCsvResult(null);
+    try {
+      const text = await file.text();
+      const result = await api.importCsv(cycleId, text);
+      setTransactions(result.transactions.map((t) => ({ ...t, verified: !!t.verified })));
+      setCsvResult({ added: result.added, skipped: result.skipped, errors: result.errors });
+      setTimeout(() => setCsvResult(null), 6000);
+    } catch (err) {
+      alert("CSV import failed: " + err.message);
+    } finally {
+      setCsvImporting(false);
+    }
+  }, [cycleId]);
 
   const handleDinnerChange = (personId, value) => {
     dinnersModified.current = true;
@@ -640,11 +666,35 @@ export default function App() {
                     : <button className="btn-primary" onClick={handleConnectBank}>Connect Bank</button>
                   }
                   <button className="btn-ghost" onClick={openManualForm}>+ Manual</button>
+                  <button
+                    className="btn-ghost"
+                    onClick={() => csvFileRef.current?.click()}
+                    disabled={csvImporting}
+                    title="Import a CIBC CSV transaction file"
+                  >
+                    {csvImporting ? "Importing…" : "Import CSV"}
+                  </button>
+                  <input
+                    ref={csvFileRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    style={{ display: "none" }}
+                    onChange={handleCsvImport}
+                  />
                 </div>
                 {/* Inline error detail */}
                 {plaidStatus === "error" && plaidSyncError && (
                   <div style={{ marginTop: 10, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent2)", background: "#3a1a1a", borderRadius: 6, padding: "8px 12px" }}>
                     {plaidSyncError}
+                  </div>
+                )}
+                {/* CSV import result */}
+                {csvResult && (
+                  <div style={{ marginTop: 10, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", background: "#0d3326", borderRadius: 6, padding: "8px 12px", display: "flex", gap: 16 }}>
+                    <span>✓ CSV imported</span>
+                    <span>Added: <strong>{csvResult.added}</strong></span>
+                    <span>Skipped (duplicate): <strong>{csvResult.skipped}</strong></span>
+                    {csvResult.errors > 0 && <span style={{ color: "var(--accent2)" }}>Parse errors: <strong>{csvResult.errors}</strong></span>}
                   </div>
                 )}
               </div>
@@ -670,8 +720,8 @@ export default function App() {
                         <td style={{ padding: "12px 20px", fontWeight: 500 }}>{entry.label}</td>
                         <td style={{ padding: "12px 20px", color: "var(--accent3)" }}>{fmt(entry.amount)}</td>
                         <td style={{ padding: "12px 20px" }}>
-                          <span className={`tag ${entry.source === "visa" ? "tag-yellow" : "tag-green"}`}>
-                            {entry.source === "visa" ? "💳 Visa" : "🧾 Manual"}
+                          <span className={`tag ${entry.source === "visa" ? "tag-yellow" : entry.source === "csv" ? "tag-yellow" : "tag-green"}`}>
+                            {entry.source === "visa" ? "💳 Visa" : entry.source === "csv" ? "📄 CSV" : "🧾 Manual"}
                           </span>
                         </td>
                         <td style={{ padding: "12px 20px" }}>
