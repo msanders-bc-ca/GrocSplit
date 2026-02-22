@@ -2,6 +2,7 @@
 
 A household grocery bill splitting app. Track shared grocery spending across a monthly billing cycle, log how many dinners each person ate, and automatically calculate what each person owes — with support for bank sync via Plaid, CSV import from CIBC, and manual entry.
 
+![Alt text](images/image.png)
 ---
 
 ## How It Works
