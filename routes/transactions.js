@@ -47,6 +47,7 @@ function parseCibcRow(line) {
   const merchant = fields[1].trim();
   const debit    = fields[2].trim(); // positive = expense
   const credit   = fields[3]?.trim() || ""; // positive = refund — we skip these
+  const cardNum  = fields[4]?.trim() || "";
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   if (!merchant) return null;
@@ -56,7 +57,10 @@ function parseCibcRow(line) {
   const amount = parseFloat(debit);
   if (isNaN(amount) || amount <= 0) return null;
 
-  return { date, merchant, amount };
+  // Extract last 4 digits from card number field (e.g. "xxxx1234" or "1234")
+  const last4 = cardNum.replace(/\D/g, "").slice(-4) || "0000";
+
+  return { date, merchant, amount, last4 };
 }
 
 // GET /api/cycles/:cycleId/transactions
@@ -90,7 +94,7 @@ router.post("/", (req, res) => {
       plaid_id: null,
       date: date || new Date().toISOString().slice(0, 10),
       merchant: merchant.trim(),
-      amount: Math.abs(Number(amount)), // always store as positive expense
+      amount: Number(amount),
       source,
       notes: notes || null,
     });
@@ -146,10 +150,10 @@ router.post("/import-csv", (req, res) => {
     const parsed = parseCibcRow(line);
     if (!parsed) { errors++; continue; }
 
-    const { date, merchant, amount } = parsed;
+    const { date, merchant, amount, last4 } = parsed;
 
-    // Deduplicate: generate a fingerprint stored as plaid_id
-    const fingerprint = `csv:${date}:${merchant}:${amount.toFixed(2)}`;
+    // Deduplicate: content fingerprint shared with Plaid sync to avoid cross-source dups
+    const fingerprint = `${date}:${amount.toFixed(2)}:${last4}`;
     const existing = tx.byPlaidId.get({ plaid_id: fingerprint });
     if (existing) { skipped++; continue; }
 

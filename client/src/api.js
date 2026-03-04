@@ -14,7 +14,11 @@ async function request(method, path, body) {
   });
 
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(data.error || `HTTP ${res.status}`);
+    err.data = data;
+    throw err;
+  }
   return data;
 }
 
@@ -53,7 +57,8 @@ export const importCsv          = (cycleId, csv) =>
   request("POST", `/cycles/${cycleId}/transactions/import-csv`, { csv });
 
 // ── Plaid ──────────────────────────────────────────────────────────────────
-export const getPlaidStatus    = ()         => request("GET",  "/plaid/status");
-export const getLinkToken      = ()         => request("POST", "/plaid/link-token");
-export const exchangeToken     = (body)     => request("POST", "/plaid/exchange", body);
-export const syncPlaid         = (cycleId)  => request("POST", `/plaid/sync/${cycleId}`);
+export const getPlaidStatus      = ()         => request("GET",  "/plaid/status");
+export const getLinkToken        = ()         => request("POST", "/plaid/link-token");
+export const getLinkTokenUpdate  = ()         => request("POST", "/plaid/link-token-update");
+export const exchangeToken       = (body)     => request("POST", "/plaid/exchange", body);
+export const syncPlaid           = (cycleId)  => request("POST", `/plaid/sync/${cycleId}`);

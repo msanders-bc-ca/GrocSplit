@@ -93,10 +93,11 @@ export default function App() {
   const [dinners, setDinners] = useState({});   // { [personId]: count }
   const [cycleId, setCycleId] = useState(null);
   const [cycleName, setCycleName] = useState("");
-  const [plaidStatus, setPlaidStatus] = useState("idle");   // idle | loading | done | error
+  const [plaidStatus, setPlaidStatus] = useState("idle");   // idle | loading | done | error | reauth
   const [plaidConnected, setPlaidConnected] = useState(false);
   const [plaidInstitution, setPlaidInstitution] = useState(null);
   const [plaidSyncError, setPlaidSyncError] = useState(null);
+  const [plaidReauthRequired, setPlaidReauthRequired] = useState(false);
   const [allCycles, setAllCycles] = useState([]);
   const [showNewCycle, setShowNewCycle] = useState(false);
   const [newCycleMonth, setNewCycleMonth] = useState("");
@@ -296,6 +297,7 @@ export default function App() {
     if (!cycleId) return;
     setPlaidStatus("loading");
     setPlaidSyncError(null);
+    setPlaidReauthRequired(false);
     try {
       const result = await api.syncPlaid(cycleId);
       const txList = await api.getTransactions(cycleId);
@@ -303,8 +305,38 @@ export default function App() {
       setPlaidStatus("done");
       console.log(`[Plaid] Sync complete: ${result.added} added, ${result.skipped} skipped`);
     } catch (err) {
-      setPlaidStatus("error");
-      setPlaidSyncError(err.message);
+      if (err.data?.reauth_required) {
+        setPlaidStatus("reauth");
+        setPlaidReauthRequired(true);
+        setPlaidSyncError(err.data.message || "Bank login expired. Re-authenticate to continue.");
+      } else {
+        setPlaidStatus("error");
+        setPlaidSyncError(err.message);
+      }
+    }
+  };
+
+  const handleReauth = async () => {
+    if (!window.Plaid) {
+      alert("Plaid Link script not loaded. Check your internet connection and refresh.");
+      return;
+    }
+    try {
+      const { link_token } = await api.getLinkTokenUpdate();
+      const handler = window.Plaid.create({
+        token: link_token,
+        onSuccess: () => {
+          setPlaidReauthRequired(false);
+          setPlaidStatus("idle");
+          setPlaidSyncError(null);
+        },
+        onExit: (err) => {
+          if (err) console.error("[Plaid] Reauth exited with error:", err);
+        },
+      });
+      handler.open();
+    } catch (err) {
+      alert("Could not open Plaid re-authentication: " + err.message);
     }
   };
 
@@ -657,13 +689,16 @@ export default function App() {
                   {plaidConnected && plaidStatus === "done"    && <span className="tag tag-green">✓ Synced</span>}
                   {plaidConnected && plaidStatus === "loading" && <span className="tag tag-yellow">syncing…</span>}
                   {plaidConnected && plaidStatus === "error"   && <span className="tag tag-red">sync failed</span>}
+                  {plaidConnected && plaidStatus === "reauth"  && <span className="tag tag-red">login expired</span>}
                   {!plaidConnected && <span className="tag tag-yellow">not connected</span>}
                   {/* Action buttons */}
-                  {plaidConnected
-                    ? <button className="btn-primary" onClick={handlePlaidSync} disabled={plaidStatus === "loading"}>
-                        {plaidStatus === "loading" ? "Syncing…" : "Sync Now"}
-                      </button>
-                    : <button className="btn-primary" onClick={handleConnectBank}>Connect Bank</button>
+                  {plaidConnected && plaidReauthRequired
+                    ? <button className="btn-primary" onClick={handleReauth}>Re-authenticate</button>
+                    : plaidConnected
+                      ? <button className="btn-primary" onClick={handlePlaidSync} disabled={plaidStatus === "loading"}>
+                          {plaidStatus === "loading" ? "Syncing…" : "Sync Now"}
+                        </button>
+                      : <button className="btn-primary" onClick={handleConnectBank}>Connect Bank</button>
                   }
                   <button className="btn-ghost" onClick={openManualForm}>+ Manual</button>
                   <button
@@ -863,7 +898,7 @@ function ManualTransactionModal({ merchant, amount, date, onMerchantChange, onAm
           </div>
           <div>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Amount</div>
-            <input type="number" min="0" step="0.01" placeholder="0.00" value={amount} onChange={(e) => onAmountChange(e.target.value)} />
+            <input type="number" step="0.01" placeholder="0.00" value={amount} onChange={(e) => onAmountChange(e.target.value)} />
           </div>
           <div>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>Date</div>

@@ -122,6 +122,12 @@ router.post("/sync/:cycleId", async (req, res) => {
 
     const allTransactions = txResponse.data.transactions;
 
+    // Build account_id → mask map for cross-source fingerprinting
+    const accountMask = {};
+    for (const acct of txResponse.data.accounts) {
+      accountMask[acct.account_id] = (acct.mask || "").replace(/\D/g, "").slice(-4) || "0000";
+    }
+
     // Filter to grocery-related transactions
     const groceryTxs = allTransactions.filter(isGrocery);
 
@@ -133,9 +139,13 @@ router.post("/sync/:cycleId", async (req, res) => {
       const amount = Math.abs(t.amount);
       if (amount <= 0) { skipped++; continue; }
 
-      // Skip if this Plaid transaction was already imported (any cycle)
-      const existing = tx.byPlaidId.get({ plaid_id: t.transaction_id });
-      if (existing) { skipped++; continue; }
+      // Check 1: Plaid-native dedup (transaction_id)
+      if (tx.byPlaidId.get({ plaid_id: t.transaction_id })) { skipped++; continue; }
+
+      // Check 2: cross-source dedup — catches transactions already imported via CSV
+      const last4 = accountMask[t.account_id] || "0000";
+      const contentFingerprint = `${t.date}:${amount.toFixed(2)}:${last4}`;
+      if (tx.byPlaidId.get({ plaid_id: contentFingerprint })) { skipped++; continue; }
 
       tx.insert.run({
         id: uuidv4(),
@@ -163,8 +173,39 @@ router.post("/sync/:cycleId", async (req, res) => {
       date_range: { from: cycle.date_from, to: cycle.date_to },
     });
   } catch (err) {
-    console.error("[Plaid] sync error:", err.response?.data || err.message);
-    res.status(500).json({ error: "Plaid sync failed", detail: err.response?.data });
+    const plaidErr = err.response?.data;
+    console.error("[Plaid] sync error:", plaidErr || err.message);
+
+    if (plaidErr?.error_code === "ITEM_LOGIN_REQUIRED") {
+      return res.status(401).json({
+        error: "ITEM_LOGIN_REQUIRED",
+        reauth_required: true,
+        message: "Your bank login has expired. Please re-authenticate to continue syncing.",
+      });
+    }
+
+    res.status(500).json({ error: "Plaid sync failed", detail: plaidErr });
+  }
+});
+
+// 4a. Create a Link token in update mode (re-authenticate an existing item)
+// POST /api/plaid/link-token-update
+router.post("/link-token-update", async (req, res) => {
+  const item = plaidDb.first.get();
+  if (!item) return res.status(400).json({ error: "No Plaid account connected." });
+
+  try {
+    const response = await plaidClient.linkTokenCreate({
+      user: { client_user_id: "grocsplit-household" },
+      client_name: "GrocSplit",
+      country_codes: ["CA"],
+      language: "en",
+      access_token: item.access_token,
+    });
+    res.json({ link_token: response.data.link_token });
+  } catch (err) {
+    console.error("[Plaid] link-token-update error:", err.response?.data || err.message);
+    res.status(500).json({ error: "Failed to create update link token", detail: err.response?.data });
   }
 });
 
